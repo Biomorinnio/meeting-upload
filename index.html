@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Загрузка записи</title>
-<!-- Страница загрузки большой записи для Telegram-бота записей (scripts/tg-bot.py). Лежит на GitHub Pages
+<title>Загрузка записей</title>
+<!-- Страница загрузки больших записей для Telegram-бота записей (scripts/tg-bot.py). Лежит на GitHub Pages
      (bot.upload.page_url, репозиторий meeting-upload, файл index.html), открывается кнопкой в чате.
-     В адресе бот передаёт одноразовую ссылку Яндекс Диска на загрузку (u), имя (n) и размер (s) файла;
-     страница отправляет выбранный файл прямо по этой ссылке, бот забирает его с Диска. Секретов здесь нет. -->
+     В адресе бот передаёт по каждому файлу одноразовую ссылку Яндекс Диска на загрузку (u1, u2…), имя (n1…)
+     и размер (s1…); страница отправляет выбранные файлы прямо по этим ссылкам, бот забирает их с Диска.
+     Секретов здесь нет. -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -34,31 +35,38 @@
     display: flex; flex-direction: column; align-items: center;
     overflow-x: hidden;
   }
-  main { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 18px; }
+  main { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 16px; }
 
   /* Шапка: облако с плавающей стрелкой */
   .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; animation: rise .6s cubic-bezier(.2,.8,.2,1) both; }
-  .hero svg { width: 76px; height: 76px; color: var(--accent); }
-  .hero .arrow { animation: bob 2.2s ease-in-out infinite; transform-origin: center; }
+  .hero svg { width: 72px; height: 72px; color: var(--accent); }
+  .hero .arrow { animation: bob 2.2s ease-in-out infinite; }
   .hero h1 { font-size: 22px; margin: 4px 0 0; letter-spacing: -.01em; }
   .hero p { margin: 0; color: var(--hint); font-size: 14px; }
 
-  /* Ожидаемый файл */
-  .file { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: var(--radius); background: var(--card);
-          animation: rise .6s .08s cubic-bezier(.2,.8,.2,1) both; }
-  .file .ico { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-size: 22px;
+  /* Список файлов */
+  .files { display: flex; flex-direction: column; gap: 8px; }
+  .file { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 16px; background: var(--card); }
+  .files.intro .file { animation: rise .5s cubic-bezier(.2,.8,.2,1) both; }
+  .file .fill { position: absolute; inset: 0; width: 0; background: color-mix(in srgb, var(--accent) 12%, transparent); transition: width .35s ease-out; }
+  .file.finished .fill { width: 100% !important; background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .file > *:not(.fill) { position: relative; }
+  .file .ico { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 20px;
                background: color-mix(in srgb, var(--accent) 14%, transparent); }
-  .file .name { font-weight: 600; word-break: break-all; line-height: 1.3; }
-  .file .meta { color: var(--hint); font-size: 13px; margin-top: 2px; }
+  .file .txt { flex: 1; min-width: 0; }
+  .file .name { font-weight: 600; font-size: 15px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file .meta { color: var(--hint); font-size: 13px; margin-top: 1px; }
+  .chip { flex: none; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--hint) 16%, transparent); color: var(--hint);
+          font-variant-numeric: tabular-nums; transition: background .3s, color .3s; }
+  .chip.picked { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  .chip.up { background: var(--accent); color: var(--accent-fg); }
+  .chip.ok { background: var(--ok); color: #fff; animation: pop .35s ease-out; }
+  .chip.bad { background: var(--err); color: #fff; }
 
-  /* Экраны состояний */
-  .stage { display: none; }
-  .stage.on { display: block; animation: rise .45s cubic-bezier(.2,.8,.2,1) both; }
-
-  /* Выбор файла */
+  /* Выбор файлов */
   .drop {
-    position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px;
-    padding: 26px 16px; border-radius: var(--radius); cursor: pointer; text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 22px 16px; border-radius: var(--radius); cursor: pointer; text-align: center;
     border: 2px dashed color-mix(in srgb, var(--accent) 45%, transparent);
     background: color-mix(in srgb, var(--accent) 6%, transparent);
     transition: transform .2s, background .2s, border-color .2s;
@@ -70,7 +78,7 @@
     background: var(--accent); color: var(--accent-fg); box-shadow: 0 8px 22px -10px var(--accent);
     animation: pulse 2.4s ease-in-out infinite;
   }
-  .drop .btn::after { /* блик */
+  .drop .btn::after {
     content: ""; position: absolute; inset: 0; transform: translateX(-120%);
     background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.35) 50%, transparent 70%);
     animation: shine 3s ease-in-out 1s infinite;
@@ -78,41 +86,38 @@
   .drop small { color: var(--hint); font-size: 13px; }
   input[type=file] { display: none; }
 
-  /* Загрузка: кольцо прогресса */
-  .ring-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 6px 0 2px; }
-  .ring { position: relative; width: 168px; height: 168px; }
+  /* Общий ход: кольцо */
+  .busy { display: flex; flex-direction: column; align-items: center; gap: 12px; animation: rise .45s cubic-bezier(.2,.8,.2,1) both; }
+  .ring { position: relative; width: 156px; height: 156px; }
   .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
   .ring .track { stroke: var(--card); }
   .ring .bar { stroke: url(#grad); stroke-linecap: round; transition: stroke-dashoffset .35s ease-out; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 45%, transparent)); }
-  .ring .spin { transform-origin: 84px 84px; animation: spin 1.6s linear infinite; }
+  .ring .spin { transform-origin: 78px 78px; animation: spin 1.6s linear infinite; }
   .ring .center { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
-  .ring .pct { font-size: 34px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-  .ring .pct span { font-size: 18px; color: var(--hint); font-weight: 600; }
+  .ring .pct { font-size: 32px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ring .pct span { font-size: 17px; color: var(--hint); font-weight: 600; }
   .ring .sub { font-size: 12px; color: var(--hint); margin-top: -2px; }
   .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
   .stat { background: var(--card); border-radius: 14px; padding: 10px 6px; text-align: center; }
   .stat b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
   .stat i { font-style: normal; font-size: 12px; color: var(--hint); }
-  .note { text-align: center; color: var(--hint); font-size: 13px; }
+  .note { text-align: center; color: var(--hint); font-size: 13px; margin: 0; }
   .note.warn { color: var(--warn); }
+  .note.err { color: var(--err); }
 
   /* Готово */
-  .done { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 8px 0; position: relative; }
-  .check { width: 124px; height: 124px; }
+  .done { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; position: relative; animation: rise .45s both; }
+  .check { width: 112px; height: 112px; }
   .check circle { fill: color-mix(in srgb, var(--ok) 14%, transparent); stroke: var(--ok); stroke-width: 4; stroke-dasharray: 340; stroke-dashoffset: 340; animation: draw .6s ease-out forwards; }
   .check path { fill: none; stroke: var(--ok); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 80; stroke-dashoffset: 80; animation: draw .4s .5s ease-out forwards; }
-  .done h2 { margin: 4px 0 0; font-size: 21px; }
+  .done h2 { margin: 2px 0 0; font-size: 21px; }
   .done p { margin: 0; color: var(--hint); font-size: 14px; max-width: 320px; }
-  .confetti { position: absolute; top: 60px; left: 50%; width: 0; height: 0; pointer-events: none; }
+  .confetti { position: absolute; top: 56px; left: 50%; width: 0; height: 0; pointer-events: none; }
   .confetti i { position: absolute; width: 8px; height: 12px; border-radius: 2px; opacity: 0; animation: burst 1.1s .45s cubic-bezier(.15,.7,.3,1) forwards; }
 
-  /* Ошибка */
-  .fail { text-align: center; padding: 16px; border-radius: var(--radius); background: color-mix(in srgb, var(--err) 10%, transparent); animation: shake .45s ease-in-out; }
-  .fail b { display: block; color: var(--err); margin-bottom: 4px; font-size: 17px; }
-  .fail p { margin: 0 0 12px; font-size: 14px; }
-  .fail button { border: 0; padding: 12px 22px; border-radius: 12px; font: inherit; font-weight: 600; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
-
-  .foot { text-align: center; color: var(--hint); font-size: 12px; animation: rise .6s .16s both; }
+  .retry { border: 0; padding: 12px 22px; border-radius: 12px; font: inherit; font-weight: 600; background: var(--accent); color: var(--accent-fg); cursor: pointer; align-self: center; }
+  .shake { animation: shake .45s ease-in-out; }
+  .foot { text-align: center; color: var(--hint); font-size: 12px; }
 
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   @keyframes bob { 0%, 100% { transform: translateY(2px); } 50% { transform: translateY(-4px); } }
@@ -120,10 +125,8 @@
   @keyframes shine { 0% { transform: translateX(-120%); } 60%, 100% { transform: translateX(120%); } }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes draw { to { stroke-dashoffset: 0; } }
-  @keyframes burst {
-    0% { opacity: 1; transform: translate(0, 0) rotate(0); }
-    100% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--r)); }
-  }
+  @keyframes pop { 0% { transform: scale(.7); } 70% { transform: scale(1.12); } 100% { transform: scale(1); } }
+  @keyframes burst { 0% { opacity: 1; transform: translate(0, 0) rotate(0); } 100% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--r)); } }
   @keyframes shake { 0%, 100% { transform: none; } 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
@@ -138,72 +141,55 @@
       <path d="M46 46h3a10 10 0 0 0 1-19.95A16 16 0 0 0 19.3 22 12 12 0 0 0 17 46h3" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
       <g class="arrow"><path d="M32 52V32m0 0-8 8m8-8 8 8" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g>
     </svg>
-    <h1>Загрузка записи</h1>
-    <p id="lead">Запись больше 20 МБ - отправим её сюда, а дальше всё сделает бот</p>
+    <h1 id="title">Загрузка записи</h1>
+    <p id="lead">Файлы больше 20 МБ - отправим их сюда, а дальше всё сделает бот</p>
   </header>
 
-  <section class="file" id="want">
-    <div class="ico" id="wantIco">🎬</div>
-    <div>
-      <div class="name" id="wantName">запись встречи</div>
-      <div class="meta" id="wantMeta">выберите этот файл</div>
-    </div>
-  </section>
+  <section class="files" id="files"></section>
 
-  <section class="stage on" id="pick">
+  <section id="pick">
     <label class="drop" id="drop" for="file">
-      <span class="btn">Выбрать файл</span>
-      <small>или перетащите его сюда</small>
+      <span class="btn" id="pickText">Выбрать файл</span>
+      <small id="pickHint">или перетащите сюда</small>
     </label>
-    <input type="file" id="file" accept="video/*,audio/*,.webm,.mp4,.mov,.mkv,.m4a,.mp3,.ogg,.wav,.txt">
+    <input type="file" id="file" multiple accept="video/*,audio/*,.webm,.mp4,.mov,.mkv,.m4a,.mp3,.ogg,.wav,.txt">
   </section>
 
-  <section class="stage" id="busy">
-    <div class="ring-wrap">
-      <div class="ring">
-        <svg viewBox="0 0 168 168">
-          <defs>
-            <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="var(--accent)"/>
-              <stop offset="1" stop-color="var(--ok)"/>
-            </linearGradient>
-          </defs>
-          <circle class="track" cx="84" cy="84" r="74" fill="none" stroke-width="12"/>
-          <circle class="bar" id="bar" cx="84" cy="84" r="74" fill="none" stroke-width="12" stroke-dasharray="465 465" stroke-dashoffset="465"/>
-          <circle class="spin" cx="84" cy="84" r="58" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 14" opacity=".35"/>
-        </svg>
-        <div class="center"><div><div class="pct" id="pct">0<span>%</span></div><div class="sub">загружено</div></div></div>
-      </div>
-      <div class="stats">
-        <div class="stat"><b id="sDone">0 МБ</b><i>из <span id="sTotal">…</span></i></div>
-        <div class="stat"><b id="sSpeed">-</b><i>скорость</i></div>
-        <div class="stat"><b id="sLeft">-</b><i>осталось</i></div>
-      </div>
-      <div class="note" id="busyNote">Не закрывайте это окно до конца загрузки</div>
-    </div>
-  </section>
-
-  <section class="stage" id="ok">
-    <div class="done">
-      <div class="confetti" id="confetti"></div>
-      <svg class="check" viewBox="0 0 124 124" aria-hidden="true">
-        <circle cx="62" cy="62" r="54"/>
-        <path d="M40 64l15 15 30-32"/>
+  <section class="busy" id="busy" hidden>
+    <div class="ring">
+      <svg viewBox="0 0 156 156">
+        <defs>
+          <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="var(--accent)"/>
+            <stop offset="1" stop-color="var(--ok)"/>
+          </linearGradient>
+        </defs>
+        <circle class="track" cx="78" cy="78" r="68" fill="none" stroke-width="12"/>
+        <circle class="bar" id="bar" cx="78" cy="78" r="68" fill="none" stroke-width="12" stroke-dasharray="428 428" stroke-dashoffset="428"/>
+        <circle class="spin" cx="78" cy="78" r="53" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 14" opacity=".35"/>
       </svg>
-      <h2>Получено!</h2>
-      <p>Дальше - в карточке в чате: расшифровка и результат придут туда. Окно закроется само.</p>
+      <div class="center"><div><div class="pct" id="pct">0<span>%</span></div><div class="sub" id="ringSub">загружено</div></div></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="sDone">0 МБ</b><i>из <span id="sTotal">…</span></i></div>
+      <div class="stat"><b id="sSpeed">-</b><i>скорость</i></div>
+      <div class="stat"><b id="sLeft">-</b><i>осталось</i></div>
     </div>
   </section>
 
-  <section class="stage" id="bad">
-    <div class="fail">
-      <b>Не получилось</b>
-      <p id="badText"></p>
-      <button type="button" id="retry">Попробовать ещё раз</button>
-    </div>
+  <section class="done" id="ok" hidden>
+    <div class="confetti" id="confetti"></div>
+    <svg class="check" viewBox="0 0 124 124" aria-hidden="true">
+      <circle cx="62" cy="62" r="54"/>
+      <path d="M40 64l15 15 30-32"/>
+    </svg>
+    <h2 id="okTitle">Получено!</h2>
+    <p>Дальше - в карточке в чате: расшифровка и результат придут туда. Окно закроется само.</p>
   </section>
 
-  <div class="foot">Файл идёт сразу в хранилище компании, ссылка одноразовая</div>
+  <p class="note" id="note"></p>
+  <button class="retry" type="button" id="retry" hidden>Попробовать ещё раз</button>
+  <div class="foot">Файлы идут сразу в хранилище компании, ссылки одноразовые</div>
 </main>
 <script>
 const tg = window.Telegram && Telegram.WebApp;
@@ -211,25 +197,58 @@ if (tg && tg.initData) {
   tg.ready(); tg.expand();
   document.documentElement.setAttribute('data-tg', '');
 }
-const haptic = (kind) => { try { tg && tg.HapticFeedback && (kind === 'tap' ? tg.HapticFeedback.impactOccurred('light') : tg.HapticFeedback.notificationOccurred(kind)); } catch (e) {} };
-const q = new URLSearchParams(location.search);
-const href = q.get('u') || '';
-const wantName = q.get('n') || '';
-const wantSize = Number(q.get('s')) || 0;
+const haptic = kind => { try { tg && tg.HapticFeedback && (kind === 'tap' ? tg.HapticFeedback.impactOccurred('light') : tg.HapticFeedback.notificationOccurred(kind)); } catch (e) {} };
 const $ = id => document.getElementById(id);
 const mb = n => n >= 1048576 ? (n / 1048576).toFixed(n >= 10 * 1048576 ? 0 : 1).replace('.', ',') + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ';
-const RING = 2 * Math.PI * 74;
-let chosen = null;
+const icon = name => /\.(mp3|m4a|ogg|oga|opus|wav)$/i.test(name) ? '🎧' : /\.txt$/i.test(name) ? '📄' : '🎬';
+// «Запись встречи 30.10.2026 13_39_41.webm» -> «Запись 30.10 · 13:39»: время не обрезается
+const label = name => { const m = /^Запись встречи (\d\d\.\d\d)\.\d{4}[ _]+(\d\d)[_:.](\d\d)/i.exec(name); return m ? `Запись ${m[1]} · ${m[2]}:${m[3]}` : name; };
+const ext = name => (/\.([a-z0-9]+)$/i.exec(name) || [])[1] || '';
+const RING = 2 * Math.PI * 68;
+const DISK = /^https:\/\/[a-z0-9.-]+\.disk\.yandex\.net(:443)?\//;
 
-function stage(id) {
-  for (const s of document.querySelectorAll('.stage')) s.classList.toggle('on', s.id === id);
+// Слоты: что бот ждёт. u1/n1/s1, u2/n2/s2…; старый вид - u/n/s.
+const q = new URLSearchParams(location.search);
+const slots = [];
+for (let i = 1; q.get('u' + i); i++) slots.push({ u: q.get('u' + i), n: q.get('n' + i) || '', s: Number(q.get('s' + i)) || 0 });
+if (!slots.length && q.get('u')) slots.push({ u: q.get('u'), n: q.get('n') || '', s: Number(q.get('s')) || 0 });
+const valid = slots.length && slots.every(s => DISK.test(s.u));
+let busy = false;
+
+function note(text, cls) { $('note').textContent = text || ''; $('note').className = 'note' + (cls ? ' ' + cls : ''); }
+
+function drawFiles() {
+  $('files').innerHTML = '';
+  slots.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'file' + (s.state === 'ok' ? ' finished' : '');
+    el.style.animationDelay = `${0.05 * i}s`;
+    const name = s.file ? s.file.name : (s.n || `запись ${i + 1}`);
+    const chip = { ok: ['ok', '✓ готово'], up: ['up', `${s.pct || 0}%`], bad: ['bad', 'ошибка'], picked: ['picked', 'выбран'] }[s.state] || ['', 'выбрать'];
+    el.innerHTML = `<div class="fill" style="width:${s.state === 'up' ? s.pct || 0 : 0}%"></div>
+      <div class="ico">${icon(name)}</div>
+      <div class="txt"><div class="name"></div><div class="meta"></div></div>
+      <span class="chip ${chip[0]}">${chip[1]}</span>`;
+    el.querySelector('.name').textContent = label(name);
+    el.querySelector('.name').title = name;
+    el.querySelector('.meta').textContent = [mb(s.file ? s.file.size : s.s), ext(name)].filter(Boolean).join(' · ');
+    s.el = el;
+    $('files').appendChild(el);
+  });
+  const left = slots.filter(s => !s.file).length;
+  $('pick').hidden = busy || left === 0;
+  $('pickText').textContent = left > 1 ? 'Выбрать файлы' : 'Выбрать файл';
+  $('pickHint').textContent = slots.length > 1 ? 'можно все сразу или по одному · или перетащите сюда' : 'или перетащите сюда';
 }
 
-function icon(name) {
-  return /\.(mp3|m4a|ogg|oga|opus|wav)$/i.test(name) ? '🎧' : /\.txt$/i.test(name) ? '📄' : '🎬';
+function setRow(s, pct) {
+  s.pct = pct;
+  if (!s.el) return;
+  s.el.querySelector('.fill').style.width = pct + '%';
+  s.el.querySelector('.chip').textContent = pct + '%';
 }
 
-function progress(done, total, speed) {
+function overall(done, total, speed) {
   const p = total ? Math.min(1, done / total) : 0;
   $('bar').style.strokeDashoffset = (RING * (1 - p)).toFixed(1);
   $('pct').innerHTML = `${Math.floor(p * 100)}<span>%</span>`;
@@ -242,25 +261,99 @@ function progress(done, total, speed) {
   }
 }
 
-function put(file) {
-  // XHR, а не fetch: у него есть ход отправки.
+// Выбранные файлы - по слотам: сначала по имени, остальные - по порядку в свободные.
+function assign(files) {
+  const free = slots.filter(s => !s.file);
+  const rest = [];
+  for (const f of files) {
+    const s = free.find(x => !x.file && x.n === f.name);
+    if (s) { s.file = f; s.state = 'picked'; } else rest.push(f);
+  }
+  let extra = 0;
+  for (const f of rest) {
+    const s = free.find(x => !x.file);
+    if (s) { s.file = f; s.state = 'picked'; } else extra++;
+  }
+  haptic('tap');
+  return extra;
+}
+
+function put(s, onProgress) {
   return new Promise((resolve, reject) => {
-    let last = { t: performance.now(), n: 0 }, speed = 0;
     const x = new XMLHttpRequest();
-    x.open('PUT', href);
-    x.upload.onprogress = e => {
-      const now = performance.now(), dt = (now - last.t) / 1000;
-      if (dt >= 0.5) {
-        const v = (e.loaded - last.n) / dt;
-        speed = speed ? speed * 0.7 + v * 0.3 : v;  // сглаженная скорость
-        last = { t: now, n: e.loaded };
-      }
-      progress(e.loaded, file.size, speed);
-    };
+    x.open('PUT', s.u);
+    x.upload.onprogress = e => onProgress(e.loaded);
     x.onload = () => (x.status >= 200 && x.status < 300) ? resolve() : reject(new Error(`хранилище ответило ${x.status}`));
     x.onerror = () => reject(new Error('пропала связь'));
-    x.send(file);
+    x.send(s.file);
   });
+}
+
+async function run() {
+  const todo = slots.filter(s => s.file && s.state !== 'ok');
+  if (!todo.length) return;
+  busy = true;
+  $('retry').hidden = true;
+  drawFiles();
+  $('busy').hidden = false;
+  if (tg) tg.enableClosingConfirmation();
+  note(slots.length > 1 ? 'Не закрывайте окно, пока не загрузятся все файлы' : 'Не закрывайте окно до конца загрузки');
+  const total = todo.reduce((a, s) => a + s.file.size, 0);
+  let base = 0, speed = 0, last = { t: performance.now(), n: 0 };
+  for (const [i, s] of todo.entries()) {
+    s.state = 'up'; s.pct = 0;
+    drawFiles();
+    $('ringSub').textContent = todo.length > 1 ? `файл ${i + 1} из ${todo.length}` : 'загружено';
+    let ok = false;
+    for (let tries = 1; tries <= 3 && !ok; tries++) {
+      try {
+        await put(s, loaded => {
+          const now = performance.now(), dt = (now - last.t) / 1000, done = base + loaded;
+          if (dt >= 0.5) { const v = (done - last.n) / dt; speed = speed ? speed * 0.7 + v * 0.3 : v; last = { t: now, n: done }; }
+          setRow(s, Math.floor(loaded * 100 / s.file.size));
+          overall(done, total, speed);
+        });
+        ok = true;
+      } catch (e) {
+        s.error = e.message;
+        if (tries < 3) { note(`Связь прервалась, начинаю файл заново (${tries + 1} из 3)…`, 'warn'); await new Promise(r => setTimeout(r, 3000 * tries)); last = { t: performance.now(), n: base }; }
+      }
+    }
+    if (!ok) {
+      s.state = 'bad';
+      busy = false;
+      if (tg) tg.disableClosingConfirmation();
+      drawFiles();
+      $('busy').hidden = true;
+      note(`Не получилось: ${s.error}. Проверьте интернет и нажмите «Попробовать ещё раз» - готовые файлы второй раз не грузятся.`, 'err');
+      $('note').classList.add('shake');
+      $('retry').hidden = false;
+      haptic('error');
+      return;
+    }
+    s.state = 'ok';
+    base += s.file.size;
+    overall(base, total, speed);
+    haptic('tap');
+    drawFiles();
+  }
+  busy = false;
+  if (tg) tg.disableClosingConfirmation();
+  const left = slots.filter(s => s.state !== 'ok').length;
+  if (left) {
+    $('busy').hidden = true;
+    drawFiles();
+    note(`Загружено ${slots.length - left} из ${slots.length}. Выберите оставшиеся.`, 'warn');
+    return;
+  }
+  $('busy').hidden = true;
+  $('pick').hidden = true;
+  note('');
+  $('okTitle').textContent = slots.length > 1 ? `Получено: ${slots.length} файла` : 'Получено!';
+  $('ok').hidden = false;
+  confetti();
+  haptic('success');
+  if (tg) setTimeout(() => tg.close(), 3200);
 }
 
 function confetti() {
@@ -276,58 +369,29 @@ function confetti() {
   }
 }
 
-async function upload(file) {
-  chosen = file;
-  haptic('tap');
-  $('wantIco').textContent = icon(file.name);
-  $('wantName').textContent = file.name;
-  $('wantMeta').textContent = mb(file.size);
-  progress(0, file.size, 0);
-  stage('busy');
-  const other = wantName && file.name !== wantName;
-  $('busyNote').textContent = other ? `Выбран другой файл - беру его. Не закрывайте окно.` : 'Не закрывайте это окно до конца загрузки';
-  $('busyNote').className = 'note' + (other ? ' warn' : '');
-  if (tg) tg.enableClosingConfirmation();
-  for (let tries = 1; ; tries++) {
-    try {
-      await put(file);
-      break;
-    } catch (e) {
-      if (tries >= 3) {
-        if (tg) tg.disableClosingConfirmation();
-        $('badText').textContent = `${e.message[0].toUpperCase()}${e.message.slice(1)}. Проверьте интернет и попробуйте снова.`;
-        stage('bad');
-        haptic('error');
-        return;
-      }
-      $('busyNote').textContent = `Связь прервалась, начинаю заново (${tries + 1} из 3)…`;
-      $('busyNote').className = 'note warn';
-      await new Promise(r => setTimeout(r, 3000 * tries));
-    }
-  }
-  progress(file.size, file.size, 0);
-  if (tg) tg.disableClosingConfirmation();
-  await new Promise(r => setTimeout(r, 350));
-  stage('ok');
-  confetti();
-  haptic('success');
-  if (tg) setTimeout(() => tg.close(), 3200);
+function picked(files) {
+  if (busy || !files.length) return;
+  const extra = assign([...files]);
+  drawFiles();
+  if (extra) note(`Лишних файлов: ${extra} - их бот не ждёт, пропускаю.`, 'warn');
+  run();
 }
 
-if (!/^https:\/\/[a-z0-9.-]+\.disk\.yandex\.net(:443)?\//.test(href)) {
-  $('lead').textContent = 'Откройте эту страницу кнопкой «📤 Загрузить запись» в чате с ботом';
-  $('want').hidden = true;
+if (!valid) {
+  $('lead').textContent = 'Откройте эту страницу кнопкой «📤 Загрузить» в чате с ботом';
   $('pick').hidden = true;
 } else {
-  $('wantIco').textContent = icon(wantName);
-  $('wantName').textContent = wantName || 'запись встречи';
-  $('wantMeta').textContent = (wantSize ? mb(wantSize) + ' · ' : '') + 'выберите этот файл';
-  $('file').addEventListener('change', e => { const f = e.target.files[0]; if (f) upload(f); });
+  $('files').classList.add('intro');  // строки появляются плавно только при открытии
+  setTimeout(() => $('files').classList.remove('intro'), 900);
+  $('title').textContent = slots.length > 1 ? `Загрузка записей (${slots.length})` : 'Загрузка записи';
+  $('lead').textContent = slots.length > 1 ? 'Эти файлы больше 20 МБ - выберите их, загрузятся по очереди' : 'Файл больше 20 МБ - отправим его сюда, а дальше всё сделает бот';
+  drawFiles();
+  $('file').addEventListener('change', e => { picked(e.target.files); e.target.value = ''; });
   const drop = $('drop');
   drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) upload(f); });
-  $('retry').addEventListener('click', () => chosen ? upload(chosen) : stage('pick'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); picked(e.dataTransfer.files); });
+  $('retry').addEventListener('click', () => { for (const s of slots) if (s.state === 'bad') s.state = 'picked'; run(); });
 }
 </script>
 </body>
