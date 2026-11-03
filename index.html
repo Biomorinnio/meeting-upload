@@ -8,6 +8,8 @@
      (bot.upload.page_url, репозиторий meeting-upload, файл index.html), открывается кнопкой в чате.
      В адресе бот передаёт по каждому файлу одноразовую ссылку Яндекс Диска на загрузку (u1, u2…), имя (n1…)
      и размер (s1…); страница отправляет выбранные файлы прямо по этим ссылкам, бот забирает их с Диска.
+     Маленькие файлы той же пачки бот берёт из чата сам: они приходят как c1=down|ok|bad (без ссылки) и
+     показываются строкой «из чата», выбирать их не нужно.
      Секретов здесь нет. -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
@@ -211,9 +213,11 @@ const DISK = /^https:\/\/[a-z0-9.-]+\.disk\.yandex\.net(:443)?\//;
 
 // Слоты: что бот ждёт. u1/n1/s1, u2/n2/s2…; старый вид - u/n/s.
 const q = new URLSearchParams(location.search);
-const slots = [];
-for (let i = 1; q.get('u' + i); i++) slots.push({ u: q.get('u' + i), n: q.get('n' + i) || '', s: Number(q.get('s' + i)) || 0 });
-if (!slots.length && q.get('u')) slots.push({ u: q.get('u'), n: q.get('n') || '', s: Number(q.get('s')) || 0 });
+const rows = [];  // все файлы пачки по порядку; slots - только те, что надо загрузить
+for (let i = 1; q.get('u' + i) || q.get('c' + i); i++) rows.push({ u: q.get('u' + i) || '', chat: q.get('c' + i) || '', n: q.get('n' + i) || '', s: Number(q.get('s' + i)) || 0 });
+if (!rows.length && q.get('u')) rows.push({ u: q.get('u'), chat: '', n: q.get('n') || '', s: Number(q.get('s')) || 0 });
+const slots = rows.filter(s => !s.chat);
+const CHAT = { down: ['picked', '⬇️ из чата'], ok: ['ok', '✓ из чата'], bad: ['bad', 'ошибка'] };
 const valid = slots.length && slots.every(s => DISK.test(s.u));
 let busy = false;
 
@@ -221,13 +225,13 @@ function note(text, cls) { $('note').textContent = text || ''; $('note').classNa
 
 function drawFiles() {
   $('files').innerHTML = '';
-  slots.forEach((s, i) => {
-    const el = document.createElement(s.file || busy ? 'div' : 'label');
-    if (!s.file && !busy) el.htmlFor = 'file';
-    el.className = 'file' + (s.state === 'ok' ? ' finished' : '');
+  rows.forEach((s, i) => {
+    const el = document.createElement(s.file || s.chat || busy ? 'div' : 'label');
+    if (!s.file && !s.chat && !busy) el.htmlFor = 'file';
+    el.className = 'file' + (s.state === 'ok' || s.chat === 'ok' ? ' finished' : '');
     el.style.animationDelay = `${0.05 * i}s`;
     const name = s.file ? s.file.name : (s.n || `запись ${i + 1}`);
-    const chip = { ok: ['ok', '✓ готово'], up: ['up', `${s.pct || 0}%`], bad: ['bad', 'ошибка'], picked: ['picked', 'выбран'] }[s.state] || ['', 'не выбран'];
+    const chip = s.chat ? CHAT[s.chat] || CHAT.down : { ok: ['ok', '✓ готово'], up: ['up', `${s.pct || 0}%`], bad: ['bad', 'ошибка'], picked: ['picked', 'выбран'] }[s.state] || ['', 'не выбран'];
     el.innerHTML = `<div class="fill" style="width:${s.state === 'up' ? s.pct || 0 : 0}%"></div>
       <div class="ico">${icon(name)}</div>
       <div class="txt"><div class="name"></div><div class="meta"></div></div>
@@ -235,7 +239,8 @@ function drawFiles() {
     el.querySelector('.name').textContent = label(name);
     el.querySelector('.name').title = name;
     // полное имя файла - чтобы найти его на устройстве
-    el.querySelector('.meta').textContent = [label(name) !== name ? name : ext(name), mb(s.file ? s.file.size : s.s)].filter(Boolean).join(' · ');
+    el.querySelector('.meta').textContent = s.chat ? `${mb(s.s)} · бот берёт из чата, загружать не нужно`
+      : [label(name) !== name ? name : ext(name), mb(s.file ? s.file.size : s.s)].filter(Boolean).join(' · ');
     s.el = el;
     $('files').appendChild(el);
   });
@@ -270,6 +275,7 @@ function assign(files) {
   const free = slots.filter(s => !s.file);
   const rest = [];
   for (const f of files) {
+    if (rows.some(x => x.chat && x.n === f.name)) continue;  // этот бот берёт из чата - не лишний, просто пропустить
     const s = free.find(x => !x.file && x.n === f.name);
     if (s) { s.file = f; s.state = 'picked'; } else rest.push(f);
   }
@@ -387,9 +393,10 @@ if (!valid) {
 } else {
   $('files').classList.add('intro');  // строки появляются плавно только при открытии
   setTimeout(() => $('files').classList.remove('intro'), 900);
-  $('lead').textContent = slots.length > 1
+  $('lead').textContent = (slots.length > 1
     ? 'Telegram не отдаёт ботам файлы больше 20 МБ - поэтому эти записи нужно выбрать ещё раз'
-    : 'Telegram не отдаёт ботам файлы больше 20 МБ - поэтому эту запись нужно выбрать ещё раз';
+    : 'Telegram не отдаёт ботам файлы больше 20 МБ - поэтому эту запись нужно выбрать ещё раз')
+    + (rows.length > slots.length ? '. Остальные бот берёт из чата сам' : '');
   $('title').textContent = slots.length > 1 ? `Ещё раз эти записи (${slots.length})` : 'Ещё раз эту запись';
   drawFiles();
   $('file').addEventListener('change', e => { picked(e.target.files); e.target.value = ''; });
