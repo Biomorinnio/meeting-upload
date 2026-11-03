@@ -6,8 +6,9 @@
 <title>Загрузка записей</title>
 <!-- Страница загрузки больших записей для Telegram-бота записей (scripts/tg-bot.py). Лежит на GitHub Pages
      (bot.upload.page_url, репозиторий meeting-upload, файл index.html), открывается кнопкой в чате.
-     В адресе бот передаёт по каждому файлу одноразовую ссылку Яндекс Диска на загрузку (u1, u2…), имя (n1…)
-     и размер (s1…); страница отправляет выбранные файлы прямо по этим ссылкам, бот забирает их с Диска.
+     В адресе бот передаёт по каждому файлу одноразовые ссылки Яндекс Диска на загрузку его частей (u1, u2… -
+     ссылки через пробел, «-» - часть уже на Диске), размер части (z1…), имя (n1…) и размер (s1…); страница режет
+     файл и отправляет части прямо по этим ссылкам, бот собирает файл из частей на Диске.
      Маленькие файлы той же пачки бот берёт из чата сам: они приходят как c1=down|ok|bad (без ссылки) и
      показываются строкой «из чата», выбирать их не нужно.
      Секретов здесь нет. -->
@@ -211,14 +212,21 @@ const ext = name => (/\.([a-z0-9]+)$/i.exec(name) || [])[1] || '';
 const RING = 2 * Math.PI * 68;
 const DISK = /^https:\/\/[a-z0-9.-]+\.disk\.yandex\.net(:443)?\//;
 
-// Слоты: что бот ждёт. u1/n1/s1, u2/n2/s2…; старый вид - u/n/s.
+// Слоты: что бот ждёт. u1/n1/s1/z1, u2/n2/s2/z2…: в u - ссылки на части файла через пробел («-» - часть уже на Диске),
+// z - размер части. Каждая часть - отдельный PUT: Диск отвечает на неё, только когда принял, поэтому ход и остаток
+// честные, а при обрыве повторяется одна часть. c1=down|ok|bad - файл бот берёт из чата сам (строка «из чата»).
 const q = new URLSearchParams(location.search);
 const rows = [];  // все файлы пачки по порядку; slots - только те, что надо загрузить
-for (let i = 1; q.get('u' + i) || q.get('c' + i); i++) rows.push({ u: q.get('u' + i) || '', chat: q.get('c' + i) || '', n: q.get('n' + i) || '', s: Number(q.get('s' + i)) || 0 });
-if (!rows.length && q.get('u')) rows.push({ u: q.get('u'), chat: '', n: q.get('n') || '', s: Number(q.get('s')) || 0 });
+for (let i = 1; q.get('u' + i) || q.get('c' + i); i++) rows.push({ u: q.get('u' + i) || '', z: Number(q.get('z' + i)) || 0, chat: q.get('c' + i) || '', n: q.get('n' + i) || '', s: Number(q.get('s' + i)) || 0 });
 const slots = rows.filter(s => !s.chat);
+for (const s of slots) {
+  const z = s.z || s.s, hrefs = s.u.split(' ');
+  s.parts = hrefs.map((h, k) => ({ h: h === '-' ? '' : h, off: k * z, len: Math.min(z, s.s - k * z), ok: h === '-' }));
+  if (s.parts.every(c => c.ok)) s.state = 'ok';  // уже на Диске целиком, бот вот-вот заберёт
+}
+const sent = s => s.parts.reduce((a, c) => a + (c.ok ? c.len : 0), 0);
 const CHAT = { down: ['picked', '⬇️ из чата'], ok: ['ok', '✓ из чата'], bad: ['bad', 'ошибка'] };
-const valid = slots.length && slots.every(s => DISK.test(s.u));
+const valid = slots.length && slots.every(s => s.s > 0 && s.parts.every(c => c.ok || DISK.test(c.h)));
 let busy = false;
 
 function note(text, cls) { $('note').textContent = text || ''; $('note').className = 'note' + (cls ? ' ' + cls : ''); }
@@ -226,8 +234,9 @@ function note(text, cls) { $('note').textContent = text || ''; $('note').classNa
 function drawFiles() {
   $('files').innerHTML = '';
   rows.forEach((s, i) => {
-    const el = document.createElement(s.file || s.chat || busy ? 'div' : 'label');
-    if (!s.file && !s.chat && !busy) el.htmlFor = 'file';
+    const open = !s.file && !s.chat && !busy && s.state !== 'ok';
+    const el = document.createElement(open ? 'label' : 'div');
+    if (open) el.htmlFor = 'file';
     el.className = 'file' + (s.state === 'ok' || s.chat === 'ok' ? ' finished' : '');
     el.style.animationDelay = `${0.05 * i}s`;
     const name = s.file ? s.file.name : (s.n || `запись ${i + 1}`);
@@ -244,7 +253,7 @@ function drawFiles() {
     s.el = el;
     $('files').appendChild(el);
   });
-  const left = slots.filter(s => !s.file).length;
+  const left = slots.filter(s => !s.file && s.state !== 'ok').length;
   $('pick').hidden = busy || left === 0;
   $('pickText').textContent = left > 1 ? 'Выбрать файлы' : 'Выбрать файл';
   $('pickHint').textContent = slots.length > 1 ? 'можно все сразу или по одному · или перетащите сюда' : 'или перетащите сюда';
@@ -266,36 +275,38 @@ function overall(done, total, speed) {
   if (speed > 0) {
     $('sSpeed').textContent = mb(speed) + '/с';
     const left = (total - done) / speed;
-    $('sLeft').textContent = left < 60 ? `${Math.max(1, Math.round(left))} с` : `~${Math.round(left / 60)} мин`;
+    $('sLeft').textContent = left < 60 ? `${Math.max(1, Math.round(left))} с` : left < 5400 ? `~${Math.round(left / 60)} мин` : `~${(left / 3600).toFixed(1).replace('.', ',')} ч`;
   }
 }
 
-// Выбранные файлы - по слотам: сначала по имени, остальные - по порядку в свободные.
+// Выбранные файлы - по слотам: сначала по имени и размеру, потом по размеру (на части файл режется по размеру -
+// чужой файл не подойдёт). Файл, который бот берёт из чата, просто пропускается.
 function assign(files) {
-  const free = slots.filter(s => !s.file);
+  const free = slots.filter(s => !s.file && s.state !== 'ok');
   const rest = [];
+  let extra = 0;
   for (const f of files) {
-    if (rows.some(x => x.chat && x.n === f.name)) continue;  // этот бот берёт из чата - не лишний, просто пропустить
-    const s = free.find(x => !x.file && x.n === f.name);
+    if (rows.some(x => x.chat && x.n === f.name)) continue;
+    const s = free.find(x => !x.file && x.n === f.name && x.s === f.size);
     if (s) { s.file = f; s.state = 'picked'; } else rest.push(f);
   }
-  let extra = 0;
   for (const f of rest) {
-    const s = free.find(x => !x.file);
+    const s = free.find(x => !x.file && x.s === f.size);
     if (s) { s.file = f; s.state = 'picked'; } else extra++;
   }
   haptic('tap');
   return extra;
 }
 
-function put(s, onProgress) {
+// Одна часть: ответ приходит, когда Диск её принял. Ошибка с кодом - чтобы отличить устаревшую ссылку от обрыва.
+function put(url, blob, onProgress) {
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
-    x.open('PUT', s.u);
+    x.open('PUT', url);
     x.upload.onprogress = e => onProgress(e.loaded);
-    x.onload = () => (x.status >= 200 && x.status < 300) ? resolve() : reject(new Error(`хранилище ответило ${x.status}`));
+    x.onload = () => (x.status >= 200 && x.status < 300) ? resolve() : reject(Object.assign(new Error(`хранилище ответило ${x.status}`), { code: x.status }));
     x.onerror = () => reject(new Error('пропала связь'));
-    x.send(s.file);
+    x.send(blob);
   });
 }
 
@@ -307,43 +318,59 @@ async function run() {
   drawFiles();
   $('busy').hidden = false;
   if (tg) tg.enableClosingConfirmation();
-  note(slots.length > 1 ? 'Не закрывайте окно, пока не загрузятся все файлы' : 'Не закрывайте окно до конца загрузки');
-  const total = todo.reduce((a, s) => a + s.file.size, 0);
-  let base = 0, speed = 0, last = { t: performance.now(), n: 0 };
+  note(todo.length > 1 ? 'Не закрывайте окно, пока не загрузятся все файлы' : 'Не закрывайте окно до конца загрузки');
+  // Ход считается по частям, которые Диск подтвердил; внутри части браузер может «бежать» вперёд по своему буферу,
+  // поэтому её вклад не больше её длины, а скорость и остаток - только по подтверждённым байтам.
+  const total = todo.reduce((a, s) => a + s.s, 0);
+  let confirmed = todo.reduce((a, s) => a + sent(s), 0);
+  const t0 = performance.now(), from = confirmed;
+  let speed = 0;
+  overall(confirmed, total, 0);
   for (const [i, s] of todo.entries()) {
-    s.state = 'up'; s.pct = 0;
+    s.state = 'up';
+    s.pct = Math.floor(sent(s) * 100 / s.s);
     drawFiles();
     $('ringSub').textContent = todo.length > 1 ? `файл ${i + 1} из ${todo.length}` : 'загружено';
-    let ok = false;
-    for (let tries = 1; tries <= 3 && !ok; tries++) {
-      try {
-        await put(s, loaded => {
-          const now = performance.now(), dt = (now - last.t) / 1000, done = base + loaded;
-          if (dt >= 0.5) { const v = (done - last.n) / dt; speed = speed ? speed * 0.7 + v * 0.3 : v; last = { t: now, n: done }; }
-          setRow(s, Math.floor(loaded * 100 / s.file.size));
-          overall(done, total, speed);
-        });
-        ok = true;
-      } catch (e) {
-        s.error = e.message;
-        if (tries < 3) { note(`Связь прервалась, начинаю файл заново (${tries + 1} из 3)…`, 'warn'); await new Promise(r => setTimeout(r, 3000 * tries)); last = { t: performance.now(), n: base }; }
+    for (const c of s.parts) {
+      if (c.ok) continue;
+      let ok = false;
+      for (let tries = 1; tries <= 3 && !ok; tries++) {
+        try {
+          await put(c.h, s.file.slice(c.off, c.off + c.len), loaded => {
+            const inflight = Math.min(loaded, c.len) * 0.9;
+            setRow(s, Math.min(99, Math.floor((sent(s) + inflight) * 100 / s.s)));
+            overall(confirmed + inflight, total, speed);
+          });
+          ok = true;
+        } catch (e) {
+          s.error = e.message;
+          if (e.code >= 400 && e.code < 500) break;  // ссылка устарела - повтор не поможет
+          if (tries < 3) { note(`Связь прервалась, повторяю кусок файла (${tries + 1} из 3)…`, 'warn'); await new Promise(r => setTimeout(r, 3000 * tries)); }
+        }
       }
-    }
-    if (!ok) {
-      s.state = 'bad';
-      busy = false;
-      if (tg) tg.disableClosingConfirmation();
-      drawFiles();
-      $('busy').hidden = true;
-      note(`Не получилось: ${s.error}. Проверьте интернет и нажмите «Попробовать ещё раз» - готовые файлы второй раз не грузятся.`, 'err');
-      $('note').classList.add('shake');
-      $('retry').hidden = false;
-      haptic('error');
-      return;
+      if (!ok) {
+        s.state = 'bad';
+        busy = false;
+        if (tg) tg.disableClosingConfirmation();
+        drawFiles();
+        $('busy').hidden = true;
+        const stale = /хранилище ответило 4/.test(s.error);
+        note(stale ? 'Ссылка на загрузку устарела. Закройте окно и снова нажмите кнопку в чате - уже загруженное второй раз не грузится.'
+                   : `Не получилось: ${s.error}. Проверьте интернет и нажмите «Попробовать ещё раз» - уже загруженное второй раз не грузится.`, 'err');
+        $('note').classList.add('shake');
+        $('retry').hidden = stale;
+        haptic('error');
+        return;
+      }
+      c.ok = true;
+      confirmed += c.len;
+      const secs = (performance.now() - t0) / 1000;
+      if (secs > 1) speed = (confirmed - from) / secs;
+      setRow(s, Math.floor(sent(s) * 100 / s.s));
+      overall(confirmed, total, speed);
+      if (s.parts.some(x => !x.ok)) note(todo.length > 1 ? 'Не закрывайте окно, пока не загрузятся все файлы' : 'Не закрывайте окно до конца загрузки');
     }
     s.state = 'ok';
-    base += s.file.size;
-    overall(base, total, speed);
     haptic('tap');
     drawFiles();
   }
@@ -383,7 +410,7 @@ function picked(files) {
   if (busy || !files.length) return;
   const extra = assign([...files]);
   drawFiles();
-  if (extra) note(`Лишних файлов: ${extra} - их бот не ждёт, пропускаю.`, 'warn');
+  if (extra) note(`Не подошло файлов: ${extra} - бот ждёт другие (по имени и размеру), пропускаю.`, 'warn');
   run();
 }
 
